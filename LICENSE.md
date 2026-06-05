@@ -1,13 +1,20 @@
 checkHEADer
-Copyright (c) 2026 wrathfuldiety  (https://github.com/wrathfuldiety)
+Copyright (c) 2026 Hasanka Amarasinghe (github.com/wrathfuldiety)
 
 Licensed under the PolyForm Noncommercial License 1.0.0, reproduced in full below.
 
-Noncommercial use is free. COMMERCIAL or ENTERPRISE use — including use in paid
-consulting or penetration-testing engagements, internal use by a for-profit
-organisation, hosting it as a paid service, or any use directed toward commercial
-advantage or monetary compensation — requires a separate PAID commercial licence
-from the author. To obtain one, contact: https://github.com/wrathfuldiety
+Noncommercial use (personal, educational, evaluation) is free.
+
+COMMERCIAL USE REQUIRES A SEPARATE PAID LICENCE FROM THE COPYRIGHT HOLDER,
+including but not limited to:
+  - use within a business or enterprise
+  - use by consultants or service providers (including paid security engagements)
+  - integration into commercial products
+  - internal corporate use
+  - SaaS offerings
+  - managed services
+
+To obtain a commercial licence, contact the author via github.com/wrathfuldiety.
 
 SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
