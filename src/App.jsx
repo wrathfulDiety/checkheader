@@ -119,7 +119,10 @@ export default function App() {
           <span className="logo-mode">Report Mode</span>
         </div>
         <div className="hdr-r">
-          <span className="local-badge">100% Local · No Network</span>
+          <div className="hdr-top">
+            <a className="home-btn" href="https://wrathfuldiety.github.io/" target="_blank" rel="noreferrer noopener">↗ All tools</a>
+            <span className="local-badge">100% Local · No Network</span>
+          </div>
           <span className="hdr-sub">HTTP Header Observation Generator</span>
         </div>
       </header>
@@ -224,7 +227,7 @@ export default function App() {
       <footer className="footer">
         <span>checkHEADer Report Mode</span><span>·</span>
         <span>100% client-side</span><span>·</span>
-        <a href="https://github.com/wrathfuldiety" target="_blank" rel="noreferrer noopener">wrathfuldiety</a>
+        <a href="https://wrathfuldiety.github.io/" target="_blank" rel="noreferrer noopener">more tools by wrathfuldiety ↗</a>
       </footer>
 
       <div className={`toast ${toast ? 'show' : ''}`}>{toast}</div>

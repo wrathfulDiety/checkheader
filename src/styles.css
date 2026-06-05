@@ -21,6 +21,9 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 .local-badge { display:inline-flex; align-items:center; gap:6px; font-size:.6rem; letter-spacing:.1em; color:var(--green); text-transform:uppercase; border:1px solid rgba(48,209,88,.3); background:rgba(48,209,88,.07); padding:3px 9px; border-radius:var(--r); }
 .local-badge::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); }
 .hdr-sub { font-size:.58rem; letter-spacing:.26em; color:var(--text-dim); text-transform:uppercase; }
+.hdr-top { display:flex; align-items:center; gap:10px; }
+.home-btn { display:inline-flex; align-items:center; gap:5px; font-size:.6rem; letter-spacing:.12em; text-transform:uppercase; color:var(--text); background:var(--surf2); border:1px solid var(--border3); padding:4px 11px; border-radius:var(--r); text-decoration:none; transition:all .15s; white-space:nowrap; }
+.home-btn:hover { border-color:var(--green); color:var(--green); background:var(--surf3); }
 
 .controls { display:flex; align-items:center; gap:14px; padding:16px 0 10px; flex-wrap:wrap; }
 .seg-label { font-size:.62rem; letter-spacing:.16em; color:var(--text-muted); text-transform:uppercase; }
