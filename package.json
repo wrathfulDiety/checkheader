@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "description": "checkHEADer Report Mode — paste HTTP response headers, get a report-ready security observation. 100% client-side.",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

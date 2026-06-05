@@ -51,4 +51,11 @@ console.log(formatSecurityObservation(result.security, 'web')) // or 'api'
 
 ## License
 
-MIT © [wrathfuldiety](https://github.com/wrathfuldiety)
+**Source-available — not open source.** Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
+
+- **Free** for noncommercial use, evaluation, and personal/learning use.
+- **Commercial or enterprise use requires a paid licence** — including use in paid penetration-testing or consulting engagements, internal use by a for-profit organisation, or offering it as a hosted service.
+
+To obtain a commercial licence, contact the author: [github.com/wrathfuldiety](https://github.com/wrathfuldiety).
+
+© 2026 wrathfuldiety
