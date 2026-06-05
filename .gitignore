@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-single
+dist-ssr
+*.local
+.DS_Store
+.vite
+
+# Internal pitch materials (slide, write-up, email, generators) — keep OUT of the public repo
+docs/
