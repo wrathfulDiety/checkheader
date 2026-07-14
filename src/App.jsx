@@ -107,7 +107,7 @@ export default function App() {
     empty: 'No information-disclosure issues were identified in the {subj} response headers.',
   })
   const additionalObs = formatAdditionalObservation(result.additional, mode)
-  const securityCards = result.security.filter(f => f.state !== 'absent-deprecated')
+  const securityCards = result.security
 
   return (
     <div className="app">
@@ -212,7 +212,7 @@ export default function App() {
                   {result.additional.map(a => (
                     <tr key={a.label}>
                       <td className="name">{a.label}</td>
-                      <td><span className={`st ${a.status}`}>{a.status === 'ok' ? 'PRESENT' : a.status === 'weak' ? 'WEAK' : 'MISSING'}</span></td>
+                      <td><span className={`st ${a.status}`}>{a.status === 'ok' ? 'PRESENT' : a.status === 'weak' ? 'WEAK' : a.status === 'dep' ? 'DEPRECATED' : 'MISSING'}</span></td>
                       <td className="val">{a.value}</td>
                       <td className="note">{a.note}</td>
                     </tr>

@@ -64,6 +64,23 @@ function finding(o) {
 }
 
 /* ===========================================================================
+ * SEVERITY POLICY
+ *
+ * A response-header check observes configuration only — it cannot demonstrate
+ * impact. Missing or weak security headers are defence-in-depth controls whose
+ * risk is realised only when chained with a separately-proven exploit (e.g. a
+ * missing CSP matters only where an injection already exists). Rating such
+ * standalone findings HIGH/MEDIUM over-states them and is routinely rejected by
+ * triage. This tool therefore caps ratings accordingly:
+ *   - Missing / weak security header (CSP, HSTS, X-Frame-Options, X-Content-
+ *     Type-Options, Cache-Control)  -> LOW  (ceiling; no exploit is asserted)
+ *   - Pure version / technology disclosure (Server, X-Powered-By, ASP.NET, charset) -> INFO
+ *   - Deprecated header (X-XSS-Protection) and defence-in-depth extras (COOP/COEP/CORP) -> INFO
+ * Consumers who have demonstrated a chained exploit should escalate manually in
+ * their report; the scanner does not do it for them.
+ * ======================================================================== */
+
+/* ===========================================================================
  * TAB 1 — SECURITY HEADERS  (core security header set)
  * ======================================================================== */
 
@@ -77,7 +94,7 @@ function analyzeCSP(h) {
   }
   if (!val) {
     return finding({
-      key: 'csp', label, state: 'missing', severity: 'HIGH',
+      key: 'csp', label, state: 'missing', severity: 'LOW',
       evidence: 'Header not present in response',
       web: "The application does not implement a Content-Security-Policy (CSP) header in the HTTP response. As a result, the browser is not provided with granular control over permitted sources and does not align with best practice security standards.",
       api: "The API does not implement a Content-Security-Policy (CSP) header in the HTTP response. As a result, no granular control is enforced over the sources permitted to interact with the response, and the configuration does not align with best practice security standards.",
@@ -85,7 +102,6 @@ function analyzeCSP(h) {
   }
 
   const ro = reportOnly ? ' (delivered in report-only mode and therefore not enforced)' : '';
-  const sevBump = reportOnly ? 'MEDIUM' : null;
   const low = val.toLowerCase();
   const dirs = val.split(';').map(d => d.trim()).filter(Boolean);
   const dirNames = dirs.map(d => d.split(/\s+/)[0].toLowerCase());
@@ -110,7 +126,7 @@ function analyzeCSP(h) {
       ? ' Additionally, a large number of external domains are allowed for scripts, images, styles, frames, and connections.'
       : '';
     return finding({
-      key: 'csp', label, state: 'misconfigured', severity: sevBump || 'HIGH', evidence: clip(val),
+      key: 'csp', label, state: 'misconfigured', severity: 'LOW', evidence: clip(val),
       web: `The application implements a Content-Security-Policy header${ro}; however, it is configured with overly permissive directives such as ${phrase}.${extra} As a result, the header does not provide granular control over permitted sources and does not align with best practice security standards.`,
       api: `The API implements a Content-Security-Policy header${ro}; however, it is configured with overly permissive directives such as ${phrase}.${extra} As a result, the header does not provide granular control over permitted sources and does not align with best practice security standards.`,
     });
@@ -121,7 +137,7 @@ function analyzeCSP(h) {
   if (fa && meaningful.length && meaningful.every(d => d === 'frame-ancestors')) {
     const faVal = fa.replace(/^frame-ancestors\s*/i, '').trim();
     return finding({
-      key: 'csp', label, state: 'misconfigured', severity: 'MEDIUM', evidence: clip(val),
+      key: 'csp', label, state: 'misconfigured', severity: 'LOW', evidence: clip(val),
       web: `The application implements a limited Content-Security-Policy header${ro} restricted to frame-ancestors ${faVal}. While this provides protection against framing, the policy does not define source restrictions for scripts, styles, images, or network connections. As a result, the browser is not provided with granular control over permitted resources, and the configuration does not fully align with best practice security standards.`,
       api: `The API implements a limited Content-Security-Policy header${ro} restricted to frame-ancestors ${faVal}. While this provides protection against framing, the policy does not define source restrictions for scripts, styles, images, or network connections. As a result, no granular control is enforced over permitted resources, and the configuration does not fully align with best practice security standards.`,
     });
@@ -134,7 +150,7 @@ function analyzeCSP(h) {
     const ds = defaultSrc ? ` (default-src ${defaultSrc.replace(/^default-src\s*/i, '').trim()})` : '';
     const missList = listPhrase(missing);
     return finding({
-      key: 'csp', label, state: 'misconfigured', severity: 'MEDIUM', evidence: clip(val),
+      key: 'csp', label, state: 'misconfigured', severity: 'LOW', evidence: clip(val),
       web: `The application implements a Content-Security-Policy header${ro}${ds}; however, it does not define granular directives (${missList}) for permitted sources such as scripts, connections, images, and styles. As a result, the browser is not provided with granular control over these resource types and the configuration does not fully align with best practice security standards.`,
       api: `The API implements a Content-Security-Policy header${ro}${ds}; however, it does not define granular directives (${missList}) for permitted sources such as scripts, connections, images, and styles. As a result, no granular control is enforced over these resource types and the configuration does not fully align with best practice security standards.`,
     });
@@ -143,7 +159,7 @@ function analyzeCSP(h) {
   // report-only but otherwise complete is still worth flagging
   if (reportOnly) {
     return finding({
-      key: 'csp', label, state: 'misconfigured', severity: 'MEDIUM', evidence: clip(val),
+      key: 'csp', label, state: 'misconfigured', severity: 'LOW', evidence: clip(val),
       web: `The application defines a Content-Security-Policy but delivers it through the Content-Security-Policy-Report-Only header. As a result, violations are only reported and the policy is not enforced by the browser.`,
       api: `The API defines a Content-Security-Policy but delivers it through the Content-Security-Policy-Report-Only header. As a result, the policy is not enforced.`,
     });
@@ -152,25 +168,47 @@ function analyzeCSP(h) {
   return finding({ key: 'csp', label, state: 'ok', severity: 'PASS', evidence: clip(val) });
 }
 
-function analyzeXXP(h) {
+/**
+ * X-XSS-Protection assessment for the Additional Hardening tab.
+ *
+ * The header is deprecated: modern browsers have removed the reflected-XSS
+ * auditor it controlled, and setting '1' (without mode=block) can itself
+ * introduce vulnerabilities in legacy engines. It is therefore surfaced as an
+ * informational/defence-in-depth item — always shown (even when absent) with a
+ * note explaining its deprecated status — rather than flagged as a missing core
+ * security header. Some client managers still expect to see it addressed.
+ *
+ * Returns an analyzeAdditional-shaped row ({ key, label, status, state, value, note, ... }).
+ */
+function analyzeXXPAdditional(h) {
   const label = 'X-XSS-Protection';
   const v = h['x-xss-protection'];
-  // Deprecated header: do NOT report when missing.
   if (!v) {
-    return finding({
-      key: 'xxp', label, state: 'absent-deprecated', severity: 'INFO',
-      evidence: 'Header not present (deprecated — not reported when absent)',
-    });
+    return {
+      key: 'xxp', label, status: 'dep', state: 'deprecated', severity: 'INFO', value: 'not set',
+      note: 'Deprecated — modern browsers no longer support this header; intentionally omitted. Reported for completeness; no action required.',
+    };
   }
   const norm = v.trim().toLowerCase().replace(/\s+/g, '');
-  if (norm !== '1;mode=block') {
-    return finding({
-      key: 'xxp', label, state: 'misconfigured', severity: 'LOW', evidence: 'X-XSS-Protection: ' + v,
-      web: `The application sets the X-XSS-Protection header to '${clip(v, 80)}'; however, best practice is to set the value '1; mode=block' so that the browser's reflected-XSS filter is enabled in blocking mode. As currently configured the header does not provide the recommended protection.`,
-      api: `The API sets the X-XSS-Protection header to '${clip(v, 80)}'; however, best practice is to set the value '1; mode=block' so that the reflected-XSS filter is enabled in blocking mode. As currently configured the header does not provide the recommended protection.`,
-    });
+  if (norm === '0') {
+    return {
+      key: 'xxp', label, status: 'ok', state: 'ok', severity: 'PASS', value: clip(v, 120),
+      note: "Explicitly disabled ('0') — the modern recommended configuration.",
+    };
   }
-  return finding({ key: 'xxp', label, state: 'ok', severity: 'PASS', evidence: 'X-XSS-Protection: ' + v });
+  if (norm === '1;mode=block') {
+    return {
+      key: 'xxp', label, status: 'dep', state: 'deprecated', severity: 'INFO', value: clip(v, 120),
+      note: "Deprecated header set to the legacy best-practice value; retained for compliance. Modern guidance is to remove it and rely on Content-Security-Policy.",
+    };
+  }
+  // Any other value (e.g. bare '1') — the filter mode that can be abused in legacy browsers.
+  return {
+    key: 'xxp', label, status: 'weak', state: 'misconfigured', severity: 'LOW', value: clip(v, 120),
+    note: "Deprecated and set to a value that can introduce vulnerabilities in legacy browsers; set '0' or remove it.",
+    web: `The application sets the deprecated X-XSS-Protection header to '${clip(v, 80)}'. In legacy browsers this filter mode could be abused to introduce cross-site scripting conditions, and modern browsers ignore the header entirely. It should be set to '0' or removed, with reflected-XSS defence provided by a Content-Security-Policy.`,
+    api: `The API sets the deprecated X-XSS-Protection header to '${clip(v, 80)}'. Modern clients ignore it and in legacy browsers this value could be abused; it should be set to '0' or removed.`,
+  };
 }
 
 function analyzeXCTO(h) {
@@ -198,14 +236,14 @@ function analyzeXFO(h) {
   const v = h['x-frame-options'];
   if (!v) {
     return finding({
-      key: 'xfo', label, state: 'missing', severity: 'MEDIUM', evidence: 'Header not present in response',
+      key: 'xfo', label, state: 'missing', severity: 'LOW', evidence: 'Header not present in response',
       web: "The application does not include the X-Frame-Options header in the response. Without this protection, the application may be embedded within a malicious third-party website using an iframe, potentially exposing users to clickjacking or cross-frame scripting attacks.",
       api: "The API does not include the X-Frame-Options header in the response. While framing is less relevant for non-rendered API responses, the header is recommended so that any response cannot be embedded within a malicious third-party website using an iframe.",
     });
   }
   if (!['DENY', 'SAMEORIGIN'].includes(v.trim().toUpperCase())) {
     return finding({
-      key: 'xfo', label, state: 'misconfigured', severity: 'MEDIUM', evidence: 'X-Frame-Options: ' + v,
+      key: 'xfo', label, state: 'misconfigured', severity: 'LOW', evidence: 'X-Frame-Options: ' + v,
       web: `The application sets the X-Frame-Options header to '${clip(v, 80)}', which is not a recognised value. Only DENY or SAMEORIGIN provide effective protection; as configured the application may be embedded within a malicious third-party website using an iframe, exposing users to clickjacking.`,
       api: `The API sets the X-Frame-Options header to '${clip(v, 80)}', which is not a recognised value. Only DENY or SAMEORIGIN provide effective protection.`,
     });
@@ -218,7 +256,7 @@ function analyzeHSTS(h) {
   const v = h['strict-transport-security'];
   if (!v) {
     return finding({
-      key: 'hsts', label, state: 'missing', severity: 'HIGH', evidence: 'Header not present in response',
+      key: 'hsts', label, state: 'missing', severity: 'LOW', evidence: 'Header not present in response',
       web: "The application does not return the Strict-Transport-Security (HSTS) header. In the absence of this header, browsers are not instructed to enforce HTTPS-only communication, which may expose users to SSL stripping or downgrade attacks if HTTPS is supported by the application.",
       api: "The API does not return the Strict-Transport-Security (HSTS) header. In the absence of this header, clients are not instructed to enforce HTTPS-only communication, which may expose API traffic to SSL stripping or downgrade attacks.",
     });
@@ -234,7 +272,7 @@ function analyzeHSTS(h) {
   if (issues.length) {
     const phrase = listPhrase(issues);
     return finding({
-      key: 'hsts', label, state: 'misconfigured', severity: 'MEDIUM', evidence: 'Strict-Transport-Security: ' + v,
+      key: 'hsts', label, state: 'misconfigured', severity: 'LOW', evidence: 'Strict-Transport-Security: ' + v,
       web: `The application returns the Strict-Transport-Security header; however, ${phrase}. As a result, the protection against SSL stripping and downgrade attacks is not fully enforced.`,
       api: `The API returns the Strict-Transport-Security header; however, ${phrase}. As a result, the protection against SSL stripping and downgrade attacks is not fully enforced.`,
     });
@@ -293,7 +331,8 @@ function analyzeCache(h) {
 }
 
 export function analyzeSecurity(headers) {
-  return [analyzeCSP, analyzeXXP, analyzeXCTO, analyzeXFO, analyzeHSTS, analyzeCache].map(fn => fn(headers));
+  // X-XSS-Protection is deprecated; it is assessed in analyzeAdditional (defence-in-depth) rather than the core set.
+  return [analyzeCSP, analyzeXCTO, analyzeXFO, analyzeHSTS, analyzeCache].map(fn => fn(headers));
 }
 
 /* ===========================================================================
@@ -356,7 +395,7 @@ export function analyzeInfo(headers) {
     const hasVersion = /[\d.]{2,}|\/\d/.test(server);
     out.push(finding({
       key: 'server', label: 'Server Banner', state: hasVersion ? 'misconfigured' : 'ok',
-      severity: hasVersion ? 'LOW' : 'INFO', evidence: 'Server: ' + server,
+      severity: 'INFO', evidence: 'Server: ' + server,
       web: hasVersion
         ? `The application discloses the web server product and version in the Server response header (${clip(server, 80)}). This information assists an attacker in identifying known vulnerabilities for that specific version.`
         : '',
@@ -368,7 +407,7 @@ export function analyzeInfo(headers) {
   const xpb = headers['x-powered-by'];
   if (xpb) {
     out.push(finding({
-      key: 'xpb', label: 'X-Powered-By', state: 'misconfigured', severity: 'LOW',
+      key: 'xpb', label: 'X-Powered-By', state: 'misconfigured', severity: 'INFO',
       evidence: 'X-Powered-By: ' + xpb,
       web: `The application exposes the X-Powered-By header (${clip(xpb, 80)}), disclosing the underlying technology stack. This assists an attacker in targeting framework-specific vulnerabilities and should be suppressed.`,
       api: `The API exposes the X-Powered-By header (${clip(xpb, 80)}), disclosing the underlying technology stack. This assists an attacker in targeting framework-specific vulnerabilities and should be suppressed.`,
@@ -377,7 +416,7 @@ export function analyzeInfo(headers) {
   const aspnet = headers['x-aspnet-version'] || headers['x-aspnetmvc-version'];
   if (aspnet) {
     out.push(finding({
-      key: 'aspnet', label: 'ASP.NET Version', state: 'misconfigured', severity: 'LOW',
+      key: 'aspnet', label: 'ASP.NET Version', state: 'misconfigured', severity: 'INFO',
       evidence: (headers['x-aspnet-version'] ? 'X-AspNet-Version: ' + headers['x-aspnet-version'] : 'X-AspNetMvc-Version: ' + headers['x-aspnetmvc-version']),
       web: `The application discloses the ASP.NET framework version (${clip(aspnet, 60)}) in the response headers, assisting an attacker in identifying version-specific vulnerabilities.`,
       api: `The API discloses the ASP.NET framework version (${clip(aspnet, 60)}) in the response headers, assisting an attacker in identifying version-specific vulnerabilities.`,
@@ -386,7 +425,7 @@ export function analyzeInfo(headers) {
   const ct = headers['content-type'];
   if (ct && /^\s*text\//i.test(ct) && !/charset\s*=/i.test(ct)) {
     out.push(finding({
-      key: 'charset', label: 'Content-Type Charset', state: 'misconfigured', severity: 'LOW',
+      key: 'charset', label: 'Content-Type Charset', state: 'misconfigured', severity: 'INFO',
       evidence: 'Content-Type: ' + ct,
       web: `The Content-Type header (${clip(ct, 60)}) does not define a character set (for example charset=utf-8). Browsers may then interpret the response using an inferred encoding, which in some cases can be leveraged for character-set based injection.`,
       api: `The Content-Type header (${clip(ct, 60)}) does not define a character set. This may lead to encoding inconsistencies for consuming clients.`,
@@ -401,6 +440,9 @@ export function analyzeInfo(headers) {
 
 export function analyzeAdditional(headers) {
   const out = [];
+
+  // X-XSS-Protection (deprecated) — always surfaced here with a deprecation note.
+  out.push(analyzeXXPAdditional(headers));
 
   // Headers that follow a simple "recommended value" pattern (COOP / COEP / CORP).
   const recHeader = (key, label, rec, okValues, missWeb, missApi, weakWeb, weakApi, sev = 'INFO') => {
@@ -552,7 +594,6 @@ export function summarize(result) {
   let pass = 0;
   const bump = arr => arr.forEach(f => {
     if (f.state === 'ok') { pass++; return; }
-    if (f.state === 'absent-deprecated') return;
     counts[f.severity] = (counts[f.severity] || 0) + 1;
   });
   bump(result.security);

@@ -86,7 +86,7 @@ textarea::placeholder { color:var(--text-muted); }
 .ah td { padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top; }
 .ah .name { color:var(--cyan); white-space:nowrap; }
 .ah .st { font-weight:700; font-size:.64rem; letter-spacing:.06em; }
-.ah .st.ok { color:var(--green); } .ah .st.miss { color:var(--text-dim); } .ah .st.weak { color:#f5a623; }
+.ah .st.ok { color:var(--green); } .ah .st.miss { color:var(--text-dim); } .ah .st.weak { color:#f5a623; } .ah .st.dep { color:var(--text-dim); }
 .ah .val { color:var(--text); word-break:break-word; }
 .ah .note { color:var(--text-dim); font-size:.74rem; }
 .ah-note { color:var(--text-dim); font-size:.7rem; margin-bottom:12px; font-style:italic; }
