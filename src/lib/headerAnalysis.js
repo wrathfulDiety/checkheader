@@ -187,6 +187,8 @@ function analyzeXXPAdditional(h) {
     return {
       key: 'xxp', label, status: 'dep', state: 'deprecated', severity: 'INFO', value: 'not set',
       note: 'Deprecated — modern browsers no longer support this header; intentionally omitted. Reported for completeness; no action required.',
+      web: "The application does not set the X-XSS-Protection header. This header is deprecated and is no longer supported by current browsers, which have removed the reflected-XSS filter it controlled; its absence therefore does not weaken the security posture and no remediation is required. Protection against reflected cross-site scripting should instead be provided through a correctly configured Content-Security-Policy together with contextual output encoding. This item is recorded for completeness only.",
+      api: "The API does not set the X-XSS-Protection header. This header is deprecated and is no longer supported by current browsers, which have removed the reflected-XSS filter it controlled; its absence therefore does not weaken the security posture and no remediation is required. Where the API also serves browser-rendered content, protection against reflected cross-site scripting should be provided through a Content-Security-Policy and contextual output encoding. This item is recorded for completeness only.",
     };
   }
   const norm = v.trim().toLowerCase().replace(/\s+/g, '');
@@ -200,6 +202,8 @@ function analyzeXXPAdditional(h) {
     return {
       key: 'xxp', label, status: 'dep', state: 'deprecated', severity: 'INFO', value: clip(v, 120),
       note: "Deprecated header set to the legacy best-practice value; retained for compliance. Modern guidance is to remove it and rely on Content-Security-Policy.",
+      web: `The application sets the X-XSS-Protection header to '${clip(v, 80)}'. This header is deprecated and is ignored by current browsers, which have removed the reflected-XSS filter it controlled, so it provides no effective protection; the value is retained only for legacy or compliance purposes. Reflected cross-site scripting should be mitigated through a correctly configured Content-Security-Policy together with contextual output encoding. The header may be removed, or set to '0', without reducing the security posture.`,
+      api: `The API sets the X-XSS-Protection header to '${clip(v, 80)}'. This header is deprecated and is ignored by current browsers, so it provides no effective protection; the value is retained only for legacy or compliance purposes. Reflected cross-site scripting should be mitigated through a Content-Security-Policy and contextual output encoding. The header may be removed, or set to '0', without reducing the security posture.`,
     };
   }
   // Any other value (e.g. bare '1') — the filter mode that can be abused in legacy browsers.
@@ -546,17 +550,23 @@ const pickFor = mode => f => (mode === 'web' ? f.web : f.api);
 const subjWord = mode => (mode === 'web' ? 'application' : 'API');
 
 /**
- * Group findings into a "misconfigured" block then a "missing" block, each led
- * by a caller-supplied sentence ({subj} is replaced with application/API).
+ * Group findings into a "misconfigured" block, then a "missing" block, then an
+ * optional "deprecated" block, each led by a caller-supplied sentence ({subj} is
+ * replaced with application/API). The deprecated block is emitted last because
+ * it is recorded for completeness rather than as a remediation item, and only
+ * when the caller supplies a `leads.dep` sentence.
  */
 function groupObservation(findings, mode, leads) {
   const pick = pickFor(mode);
   const subj = subjWord(mode);
+  const block = (list, lead) => lead.replace('{subj}', subj) + '\n\n' + list.map(f => `${f.label}:\n${pick(f)}`).join('\n\n');
   const mis = findings.filter(f => f.state === 'misconfigured' && pick(f));
   const miss = findings.filter(f => f.state === 'missing' && pick(f));
+  const dep = leads.dep ? findings.filter(f => f.state === 'deprecated' && pick(f)) : [];
   const blocks = [];
-  if (mis.length) blocks.push(leads.mis.replace('{subj}', subj) + '\n\n' + mis.map(f => `${f.label}:\n${pick(f)}`).join('\n\n'));
-  if (miss.length) blocks.push(leads.miss.replace('{subj}', subj) + '\n\n' + miss.map(f => `${f.label}:\n${pick(f)}`).join('\n\n'));
+  if (mis.length) blocks.push(block(mis, leads.mis));
+  if (miss.length) blocks.push(block(miss, leads.miss));
+  if (dep.length) blocks.push(block(dep, leads.dep));
   if (!blocks.length) return leads.empty.replace('{subj}', subj);
   return blocks.join('\n\n');
 }
@@ -575,6 +585,7 @@ export function formatAdditionalObservation(findings, mode) {
   return groupObservation(findings, mode, {
     mis: 'It was observed that the following additional security headers are weakly configured in the {subj}:',
     miss: 'It was observed that the following additional (defence-in-depth) security headers are not implemented in the {subj}:',
+    dep: 'The following deprecated security header was also assessed in the {subj}. It is recorded for completeness and does not require remediation:',
     empty: 'All additional hardening headers assessed were present and adequately configured.',
   });
 }
