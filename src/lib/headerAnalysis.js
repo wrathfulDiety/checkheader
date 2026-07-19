@@ -294,7 +294,38 @@ function analyzeCache(h) {
     .filter(Boolean).join('\n') || 'No Cache-Control / Pragma / Expires present';
 
   if (cc && low.includes('no-store')) {
-    return finding({ key: 'cache', label, state: 'ok', severity: 'PASS', evidence: ev });
+    // no-store already prevents current browsers from storing the response, so
+    // this is never a real weakness on a modern client. Many hardening
+    // checklists nevertheless require the HTTP/1.0-era companions Pragma:
+    // no-cache and an already-expired Expires value, so report those gaps as a
+    // partial-compliance item rather than passing outright.
+    const pragmaOk = !!pragma && /no-cache/i.test(pragma);
+    const expRaw = (expires || '').trim();
+    const expParsed = Date.parse(expRaw);
+    const expiresOk = expRaw !== '' &&
+      (['0', '-1'].includes(expRaw) || (!isNaN(expParsed) && expParsed <= Date.now()));
+
+    if (pragmaOk && expiresOk) {
+      return finding({ key: 'cache', label, state: 'ok', severity: 'PASS', evidence: ev });
+    }
+
+    const gaps = [];
+    if (!pragmaOk) {
+      gaps.push(pragma
+        ? `the Pragma header is set to '${clip(pragma, 40)}' rather than 'no-cache'`
+        : 'the Pragma: no-cache header is not set');
+    }
+    if (!expiresOk) {
+      gaps.push(expRaw === ''
+        ? 'the Expires header is not set'
+        : `the Expires header is set to '${clip(expRaw, 40)}', which is not an already-expired value`);
+    }
+    const phrase = listPhrase(gaps);
+    return finding({
+      key: 'cache', label, state: 'misconfigured', severity: 'INFO', evidence: ev,
+      web: `The application sets the Cache-Control: no-store directive, which prevents current browsers from storing the response; however, ${phrase}. These HTTP/1.0-era headers are ignored by modern browsers, but are still mandated by a number of hardening checklists so that legacy intermediary caches do not retain sensitive content. Setting Pragma: no-cache together with Expires: -1 alongside the existing Cache-Control directive would achieve full compliance.`,
+      api: `The API sets the Cache-Control: no-store directive, which prevents current clients from storing the response; however, ${phrase}. These HTTP/1.0-era headers are ignored by modern clients, but are still mandated by a number of hardening checklists so that legacy intermediary caches do not retain sensitive content. Setting Pragma: no-cache together with Expires: -1 alongside the existing Cache-Control directive would achieve full compliance.`,
+    });
   }
 
   const nothing = !cc && !(pragma && /no-cache/i.test(pragma)) && !expires;
