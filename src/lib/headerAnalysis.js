@@ -24,6 +24,9 @@ export const SEV_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO', 'PASS'];
  */
 export function parseHeaders(raw) {
   const headers = {};
+  // Every occurrence kept separately: headers such as CSP are enforced per
+  // header rather than as one comma-joined value.
+  const headersAll = {};
   const setCookies = [];
   const lines = String(raw || '').split(/\r?\n/);
   for (const line of lines) {
@@ -36,9 +39,10 @@ export function parseHeaders(raw) {
     const val = line.slice(idx + 1).trim();
     if (!name) continue;
     if (name === 'set-cookie') { setCookies.push(val); continue; }
+    (headersAll[name] = headersAll[name] || []).push(val);
     headers[name] = name in headers ? headers[name] + ', ' + val : val;
   }
-  return { headers, setCookies };
+  return { headers, headersAll, setCookies };
 }
 
 /* -------------------------------------------------------------- utilities -- */
@@ -84,15 +88,13 @@ function finding(o) {
  * TAB 1 — SECURITY HEADERS  (core security header set)
  * ======================================================================== */
 
-function analyzeCSP(h) {
+function analyzeCSP(h, all) {
   const label = 'Content-Security-Policy';
-  let val = h['content-security-policy'];
-  let reportOnly = false;
-  if (!val && h['content-security-policy-report-only']) {
-    val = h['content-security-policy-report-only'];
-    reportOnly = true;
-  }
-  if (!val) {
+  const listOf = n => (all && all[n]) || (h[n] ? [h[n]] : []);
+  const enforced = listOf('content-security-policy');
+  const reportOnlyList = listOf('content-security-policy-report-only');
+
+  if (!enforced.length && !reportOnlyList.length) {
     return finding({
       key: 'csp', label, state: 'missing', severity: 'LOW',
       evidence: 'Header not present in response',
@@ -101,26 +103,68 @@ function analyzeCSP(h) {
     });
   }
 
+  const reportOnly = !enforced.length;
+  const policies = reportOnly ? reportOnlyList : enforced;
+  const results = policies.map(p => analyzeCSPValue(p, reportOnly, label));
+  if (results.length === 1) return results[0];
+
+  // Each CSP header is enforced independently and the effective policy is their
+  // intersection, so an extra policy can only ever restrict further. Joining the
+  // values into one string (as a naive parse does) invents permissions that are
+  // not actually granted, so evaluate each policy and let the strictest govern.
+  const least = results.reduce((a, b) =>
+    SEV_ORDER.indexOf(b.severity) > SEV_ORDER.indexOf(a.severity) ? b : a);
+  return finding({
+    ...least,
+    evidence: `${policies.length} Content-Security-Policy headers present; each is enforced independently and the intersection applies (strictest governs).\n` +
+      policies.map((p, i) => `[${i + 1}] ${clip(p, 160)}`).join('\n'),
+  });
+}
+
+function analyzeCSPValue(val, reportOnly, label) {
   const ro = reportOnly ? ' (delivered in report-only mode and therefore not enforced)' : '';
-  const low = val.toLowerCase();
   const dirs = val.split(';').map(d => d.trim()).filter(Boolean);
   const dirNames = dirs.map(d => d.split(/\s+/)[0].toLowerCase());
   const defaultSrc = dirs.find(d => /^default-src\b/i.test(d));
   const fa = dirs.find(d => /^frame-ancestors\b/i.test(d));
 
+  // Directive -> source list, so sources are judged in the context they appear in
+  // ('data:' in img-src is benign; in a script context it is not).
+  const map = {};
+  for (const d of dirs) {
+    const parts = d.split(/\s+/);
+    map[parts[0].toLowerCase()] = parts.slice(1).map(s => s.toLowerCase());
+  }
+
+  // Sources that can lead to script execution. script-src-elem/-attr override
+  // script-src, which in turn overrides default-src; object-src can load
+  // plugin content, so it is treated as script-adjacent for data:/blob:.
+  const scriptCtx = [];
+  const explicitScript = map['script-src'] || map['script-src-elem'] || map['script-src-attr'];
+  ['script-src', 'script-src-elem', 'script-src-attr'].forEach(k => { if (map[k]) scriptCtx.push(...map[k]); });
+  if (!explicitScript && map['default-src']) scriptCtx.push(...map['default-src']);
+  if (map['object-src']) scriptCtx.push(...map['object-src']);
+
+  // A nonce, a hash, or 'strict-dynamic' causes supporting browsers to ignore
+  // 'unsafe-inline' entirely — it is then a deliberate fallback for older
+  // engines, not a weakness. This is the recommended strict-CSP pattern.
+  const unsafeInlineNeutralised = scriptCtx.some(s =>
+    /^'(nonce-|sha(256|384|512)-)/.test(s) || s === "'strict-dynamic'");
+
   const perm = [];
-  if (low.includes('unsafe-inline')) perm.push("'unsafe-inline'");
-  if (low.includes('unsafe-eval')) perm.push("'unsafe-eval'");
-  if (/(^|[\s;])data:/.test(low)) perm.push('data:');
-  if (/(^|[\s;])blob:/.test(low)) perm.push('blob:');
-  const hasWildcard = /(^|\s)\*([\s;]|$)/.test(val);
+  if (scriptCtx.includes("'unsafe-inline'") && !unsafeInlineNeutralised) perm.push("'unsafe-inline'");
+  if (scriptCtx.includes("'unsafe-eval'")) perm.push("'unsafe-eval'");
+  if (scriptCtx.includes('data:')) perm.push("'data:' in a script context");
+  if (scriptCtx.includes('blob:')) perm.push("'blob:' in a script context");
+
+  const wildcardDirs = Object.keys(map).filter(k => map[k].includes('*'));
   const domains = val.match(/(?:[a-z0-9-]+\.)+[a-z]{2,}/gi) || [];
   const manyDomains = new Set(domains.map(d => d.toLowerCase())).size >= 3;
 
   // overly permissive
-  if (perm.length || hasWildcard) {
+  if (perm.length || wildcardDirs.length) {
     const items = perm.slice();
-    if (hasWildcard && !items.length) items.push("the wildcard '*' source");
+    if (wildcardDirs.length) items.push(`the wildcard '*' source in ${listPhrase(wildcardDirs)}`);
     const phrase = listPhrase(items);
     const extra = manyDomains
       ? ' Additionally, a large number of external domains are allowed for scripts, images, styles, frames, and connections.'
@@ -144,8 +188,11 @@ function analyzeCSP(h) {
   }
 
   // present but missing granular directives
+  // default-src is the specified fallback for each of these directives, so a
+  // policy that sets it does retain granular control and must not be reported
+  // as though those directives were simply absent.
   const granular = ['script-src', 'connect-src', 'img-src', 'style-src'];
-  const missing = granular.filter(g => !dirNames.includes(g));
+  const missing = defaultSrc ? [] : granular.filter(g => !dirNames.includes(g));
   if (missing.length) {
     const ds = defaultSrc ? ` (default-src ${defaultSrc.replace(/^default-src\s*/i, '').trim()})` : '';
     const missList = listPhrase(missing);
@@ -238,6 +285,18 @@ function analyzeXCTO(h) {
 function analyzeXFO(h) {
   const label = 'X-Frame-Options';
   const v = h['x-frame-options'];
+
+  // CSP frame-ancestors supersedes X-Frame-Options and is what current browsers
+  // honour, so its presence means framing IS controlled even with no XFO header.
+  const csp = h['content-security-policy'] || '';
+  const faMatch = csp.split(';').map(d => d.trim()).find(d => /^frame-ancestors\b/i.test(d));
+  if (!v && faMatch) {
+    return finding({
+      key: 'xfo', label, state: 'ok', severity: 'PASS',
+      evidence: `Header not present, superseded by Content-Security-Policy ${faMatch}`,
+    });
+  }
+
   if (!v) {
     return finding({
       key: 'xfo', label, state: 'missing', severity: 'LOW', evidence: 'Header not present in response',
@@ -365,9 +424,9 @@ function analyzeCache(h) {
   });
 }
 
-export function analyzeSecurity(headers) {
+export function analyzeSecurity(headers, headersAll) {
   // X-XSS-Protection is deprecated; it is assessed in analyzeAdditional (defence-in-depth) rather than the core set.
-  return [analyzeCSP, analyzeXCTO, analyzeXFO, analyzeHSTS, analyzeCache].map(fn => fn(headers));
+  return [analyzeCSP, analyzeXCTO, analyzeXFO, analyzeHSTS, analyzeCache].map(fn => fn(headers, headersAll));
 }
 
 /* ===========================================================================
@@ -376,7 +435,7 @@ export function analyzeSecurity(headers) {
 
 function parseCookie(str) {
   const parts = str.split(';').map(p => p.trim()).filter(Boolean);
-  const c = { name: '', secure: false, httponly: false, samesite: '', hasMaxAgeOrExpires: false };
+  const c = { name: '', secure: false, httponly: false, samesite: '', path: '', hasDomain: false };
   parts.forEach((part, i) => {
     const eq = part.indexOf('=');
     const key = (eq === -1 ? part : part.slice(0, eq)).trim().toLowerCase();
@@ -385,10 +444,13 @@ function parseCookie(str) {
     if (key === 'secure') c.secure = true;
     else if (key === 'httponly') c.httponly = true;
     else if (key === 'samesite') c.samesite = val.toLowerCase();
-    else if (key === 'max-age' || key === 'expires') c.hasMaxAgeOrExpires = true;
+    else if (key === 'path') c.path = val;
+    else if (key === 'domain') c.hasDomain = true;
   });
   return c;
 }
+
+const SAMESITE_VALUES = ['strict', 'lax', 'none'];
 
 export function analyzeCookies(setCookies) {
   const out = [];
@@ -399,14 +461,34 @@ export function analyzeCookies(setCookies) {
     if (!c.secure) issues.push('the Secure flag is not set');
     if (!c.httponly) issues.push('the HttpOnly flag is not set');
     if (!c.samesite) issues.push('the SameSite attribute is not set');
-    else if (c.samesite === 'none' && !c.secure) issues.push('SameSite is set to None without the Secure flag');
+    else if (!SAMESITE_VALUES.includes(c.samesite)) {
+      issues.push(`SameSite is set to the invalid value '${clip(c.samesite, 30)}' (expected Strict, Lax, or None), which browsers ignore`);
+    } else if (c.samesite === 'none' && !c.secure) issues.push('SameSite is set to None without the Secure flag');
+
+    // Cookie name prefixes carry contractual requirements; a cookie that breaks
+    // them is rejected outright by the browser, so the protection is illusory.
+    const lname = c.name.toLowerCase();
+    if (lname.startsWith('__secure-') && !c.secure) {
+      issues.push('the __Secure- name prefix is used without the Secure flag, so the cookie is rejected by the browser');
+    }
+    if (lname.startsWith('__host-')) {
+      const hostIssues = [];
+      if (!c.secure) hostIssues.push('the Secure flag is not set');
+      if (c.hasDomain) hostIssues.push('a Domain attribute is present');
+      if (c.path !== '/') hostIssues.push("Path is not '/'");
+      if (hostIssues.length) {
+        issues.push(`the __Host- name prefix is used but ${listPhrase(hostIssues)}, so the cookie is rejected by the browser`);
+      }
+    }
     if (!issues.length) continue;
 
     const phrase = listPhrase(issues);
     const why = [];
     if (!c.httponly) why.push('exposes it to theft via client-side script (cross-site scripting)');
     if (!c.secure) why.push('permits transmission over unencrypted HTTP');
-    if (!c.samesite || (c.samesite === 'none' && !c.secure)) why.push('increases exposure to cross-site request forgery');
+    const sameSiteIneffective = !c.samesite || !SAMESITE_VALUES.includes(c.samesite) ||
+      (c.samesite === 'none' && !c.secure);
+    if (sameSiteIneffective) why.push('increases exposure to cross-site request forgery');
     const consequence = why.length ? ' This ' + listPhrase(why) + '.' : '';
 
     out.push(finding({
@@ -561,12 +643,12 @@ export function analyzeAdditional(headers) {
  * ======================================================================== */
 
 export function analyze(raw) {
-  const { headers, setCookies } = parseHeaders(raw);
+  const { headers, headersAll, setCookies } = parseHeaders(raw);
   return {
     headers,
     setCookies,
     count: Object.keys(headers).length + setCookies.length,
-    security: analyzeSecurity(headers),
+    security: analyzeSecurity(headers, headersAll),
     cookies: analyzeCookies(setCookies),
     info: analyzeInfo(headers),
     additional: analyzeAdditional(headers),
